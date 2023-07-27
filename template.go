@@ -6,9 +6,11 @@ package extemplate
 
 import (
 	"bytes"
+	"embed"
 	"fmt"
 	"html/template"
 	"io"
+	"io/fs"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -88,6 +90,69 @@ func (x *Extemplate) ExecuteTemplate(wr io.Writer, name string, data interface{}
 	return tmpl.Execute(wr, data)
 }
 
+// ParseFS walks the given FS and parses all files with any of the registered extensions.
+// Default extensions are .html and .tmpl
+// If a template file has {{/* extends "other-file.tmpl" */}} as its first line it will parse that file for base templates.
+// Parsed templates are named relative to the given root directory
+func (x *Extemplate) ParseFS(root embed.FS, extensions []string) error {
+	var b []byte
+	var err error
+
+	files, err := findTemplateFilesInFS(root, extensions)
+	if err != nil {
+		return err
+	}
+
+	// parse all non-child templates into the shared template namespace
+	for name, tf := range files {
+		if tf.layout != "" {
+			continue
+		}
+
+		_, err = x.shared.New(name).Parse(string(tf.contents))
+		if err != nil {
+			return err
+		}
+	}
+
+	// then, parse all templates again but with inheritance
+	for name, tf := range files {
+
+		// if this is a non-child template, no need to re-parse
+		if tf.layout == "" {
+			x.templates[name] = x.shared.Lookup(name)
+			continue
+		}
+
+		tmpl := template.Must(x.shared.Clone()).New(name)
+
+		// add to set under normalized name (path from root)
+		x.templates[name] = tmpl
+
+		// parse parent templates
+		templateFiles := []string{name}
+		pname := tf.layout
+		parent, parentExists := files[pname]
+		for parentExists {
+			templateFiles = append(templateFiles, pname)
+			pname = parent.layout
+			parent, parentExists = files[pname]
+		}
+
+		// parse template files in reverse order (because childs should override parents)
+		for j := len(templateFiles) - 1; j >= 0; j-- {
+			b = files[templateFiles[j]].contents
+			_, err = tmpl.Parse(string(b))
+			if err != nil {
+				return err
+			}
+		}
+
+	}
+
+	return nil
+}
+
 // ParseDir walks the given directory root and parses all files with any of the registered extensions.
 // Default extensions are .html and .tmpl
 // If a template file has {{/* extends "other-file.tmpl" */}} as its first line it will parse that file for base templates.
@@ -149,6 +214,50 @@ func (x *Extemplate) ParseDir(root string, extensions []string) error {
 	}
 
 	return nil
+}
+
+func findTemplateFilesInFS(root embed.FS, extensions []string) (map[string]*templatefile, error) {
+	var files = map[string]*templatefile{}
+	var exts = map[string]bool{}
+
+	// create map of allowed extensions
+	for _, e := range extensions {
+		exts[e] = true
+	}
+
+	if err := fs.WalkDir(root, ".", func(path string, d fs.DirEntry, err error) error {
+		if d.IsDir() {
+			return nil
+		}
+
+		e := filepath.Ext(path)
+		if _, ok := exts[e]; !ok {
+			return nil
+		}
+
+		files[path] = &templatefile{}
+
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+
+	for path := range files {
+		// read file into memory
+		contents, err := root.ReadFile(path)
+		if err != nil {
+			return files, err
+		}
+
+		tf, err := newTemplateFile(contents)
+		if err != nil {
+			return files, err
+		}
+
+		files[path] = tf
+	}
+
+	return files, nil
 }
 
 func findTemplateFiles(root string, extensions []string) (map[string]*templatefile, error) {
