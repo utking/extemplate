@@ -11,7 +11,6 @@ import (
 	"html/template"
 	"io"
 	"io/fs"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -294,7 +293,7 @@ func findTemplateFiles(root string, extensions []string) (map[string]*templatefi
 		name := strings.TrimPrefix(path, root)
 
 		// read file into memory
-		contents, err := ioutil.ReadFile(path)
+		contents, err := os.ReadFile(path)
 		if err != nil {
 			return err
 		}
