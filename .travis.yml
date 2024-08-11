@@ -1,9 +1,10 @@
 language: go
 
 go:
-  - 1.7
-  - 1.8
-  - tip
+  - "1.19"
+  - "1.20"
+  - "1.21"
+  - "tip"
 
 script:
-- go test -v -race
+  - go test -v -race
